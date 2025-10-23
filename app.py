@@ -698,6 +698,59 @@ body {
     margin-top: 8px;
 }
 .clear-key-btn:hover { background: #c82333; }
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.4);
+}
+.modal-content {
+    background-color: #fefefe;
+    margin: 15% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 400px;
+    text-align: center;
+    border-radius: 8px;
+    color: #000;
+}
+.close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+}
+.close:hover,
+.close:focus {
+    color: black;
+    text-decoration: none;
+    cursor: pointer;
+}
+button {
+    background-color: #667eea;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    margin: 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+button:hover {
+    background-color: #5568d3;
+}
+.cancel {
+    background-color: #dc3545;
+}
+.cancel:hover {
+    background-color: #c82333;
+}
 </style>
 </head>
 <body>
@@ -729,6 +782,19 @@ body {
                 <span class="icon">👀</span>
                 <div>Enter your private key and scan QR code</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmationModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h2>Confirm Check-out</h2>
+            <p id="modalEmployee"></p>
+            <p id="modalInTime"></p>
+            <p id="modalOutTime"></p>
+            <button onclick="confirmCheckout()">Confirm</button>
+            <button class="cancel" onclick="closeModal()">Cancel</button>
         </div>
     </div>
 
@@ -932,6 +998,83 @@ function signMessage(privateKeyBase58, message) {
 
 var resultContainer = document.getElementById('qr-reader-results');
 var lastResult;
+var currentServerQr = null;
+var currentPublicKey = null;
+
+function showModal(employee, inTime, outTime) {
+    document.getElementById('modalEmployee').textContent = 'Employee: ' + employee;
+    document.getElementById('modalInTime').textContent = 'In Time: ' + inTime;
+    document.getElementById('modalOutTime').textContent = 'Out Time: ' + outTime;
+    document.getElementById('confirmationModal').style.display = 'block';
+}
+
+function closeModal() {
+    document.getElementById('confirmationModal').style.display = 'none';
+}
+
+function confirmCheckout() {
+    closeModal();
+    const privateKey = document.getElementById('private_key_input').value.trim();
+    if (!privateKey || !currentServerQr || !currentPublicKey) {
+        resultContainer.className = 'result-container result-invalid';
+        resultContainer.innerHTML = '<div><span class="icon">❌</span><div>Error: Missing data for confirmation</div></div>';
+        setTimeout(() => { lastResult = null; }, 3000);
+        return;
+    }
+
+    // Re-sign the message
+    const employeeSignature = signMessage(privateKey, currentServerQr.message);
+    if (!employeeSignature) {
+        resultContainer.className = 'result-container result-invalid';
+        resultContainer.innerHTML = '<div><span class="icon">❌</span><div>Failed to sign for confirmation</div></div>';
+        setTimeout(() => { lastResult = null; }, 3000);
+        return;
+    }
+
+    fetch(window.location.origin + '/api/attendance', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            server_qr: currentServerQr,
+            public_key: currentPublicKey,
+            employee_signature: employeeSignature,
+            confirm_checkout: true
+        })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            resultContainer.className = 'result-container result-valid';
+            resultContainer.innerHTML = `
+                <div>
+                    <span class="icon">✅</span>
+                    <div>Check-out Successful!</div>
+                    <div class="result-details">
+                        <strong>Employee:</strong> ${data.employee_name}<br>
+                        <strong>In Time:</strong> ${data.in_time}<br>
+                        <strong>Out Time:</strong> ${data.out_time}<br>
+                        <strong>Status:</strong> ${data.status}<br>
+                        <strong>Verification:</strong> Dual-signature verified ✓
+                    </div>
+                </div>
+            `;
+            setTimeout(() => {
+                lastResult = null;
+                resultContainer.className = 'result-container result-waiting';
+                resultContainer.innerHTML = '<div><span class="icon">👀</span><div>Scan next QR code</div></div>';
+            }, 5000);
+        } else {
+            resultContainer.className = 'result-container result-invalid';
+            resultContainer.innerHTML = '<div><span class="icon">❌</span><div>' + data.message + '</div></div>';
+            setTimeout(() => { lastResult = null; }, 3000);
+        }
+    })
+    .catch(err => {
+        resultContainer.className = 'result-container result-invalid';
+        resultContainer.innerHTML = '<div><span class="icon">⚠️</span><div>Error: ' + err.message + '</div></div>';
+        setTimeout(() => { lastResult = null; }, 3000);
+    });
+}
 
 function onScanSuccess(decodedText, decodedResult) {
     const privateKey = document.getElementById('private_key_input').value.trim();
@@ -972,6 +1115,10 @@ function onScanSuccess(decodedText, decodedResult) {
         return;
     }
 
+    // Store for potential confirmation
+    currentServerQr = serverQr;
+    currentPublicKey = publicKey;
+
     // Sign the server's message with employee's private key
     console.log('Attempting to sign message:', serverQr.message);
     const employeeSignature = signMessage(privateKey, serverQr.message);
@@ -998,20 +1145,46 @@ function onScanSuccess(decodedText, decodedResult) {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
+            if (data.action === "check-in") {
+                resultContainer.className = 'result-container result-valid';
+                resultContainer.innerHTML = `
+                    <div>
+                        <span class="icon">✅</span>
+                        <div>Check-in Successful!</div>
+                        <div class="result-details">
+                            <strong>Employee:</strong> ${data.employee_name}<br>
+                            <strong>Login Time:</strong> ${data.in_time}<br>
+                            <strong>Status:</strong> ${data.status}<br>
+                            <strong>Verification:</strong> Dual-signature verified ✓<br>
+                            <small>Scan again to check-out</small>
+                        </div>
+                    </div>
+                `;
+            }
+            // Clear after success
+            setTimeout(() => {
+                lastResult = null;
+                resultContainer.className = 'result-container result-waiting';
+                resultContainer.innerHTML = '<div><span class="icon">👀</span><div>Scan next QR code</div></div>';
+            }, 5000);
+        } else if (data.message === "Confirm check-out") {
+            resultContainer.className = 'result-container result-verifying';
+            resultContainer.innerHTML = '<div><span class="icon">⏰</span><div>Check-out confirmation required</div></div>';
+            showModal(data.employee_name, data.in_time, data.out_time);
+        } else if (data.message === "Already checked out today") {
             resultContainer.className = 'result-container result-valid';
             resultContainer.innerHTML = `
                 <div>
-                    <span class="icon">✅</span>
-                    <div>Attendance Marked Successfully!</div>
+                    <span class="icon">ℹ️</span>
+                    <div>Already Checked Out Today</div>
                     <div class="result-details">
                         <strong>Employee:</strong> ${data.employee_name}<br>
-                        <strong>Time:</strong> ${data.timestamp}<br>
+                        <strong>In Time:</strong> ${data.in_time}<br>
+                        <strong>Out Time:</strong> ${data.out_time}<br>
                         <strong>Status:</strong> ${data.status}<br>
-                        <strong>Verification:</strong> Dual-signature verified ✓
                     </div>
                 </div>
             `;
-            // Clear after success
             setTimeout(() => {
                 lastResult = null;
                 resultContainer.className = 'result-container result-waiting';
@@ -1179,7 +1352,8 @@ function renderTable(records) {
             <thead>
                 <tr>
                     <th>Date</th>
-                    <th>Time</th>
+                    <th>In Time</th>
+                    <th>Out Time</th>
                     <th>Employee ID</th>
                     <th>Name</th>
                     <th>Status</th>
@@ -1194,7 +1368,8 @@ function renderTable(records) {
         html += `
             <tr>
                 <td>${record.date}</td>
-                <td>${record.time}</td>
+                <td>${record.in_time}</td>
+                <td>${record.out_time || 'Not checked out'}</td>
                 <td>${record.emp_id}</td>
                 <td>${record.employee_name}</td>
                 <td class="${statusClass}">${record.status}</td>
@@ -1377,7 +1552,7 @@ def api_attendance():
 
     # === Verification Step 3: Prevent Replay Attacks ===
     time_slot = get_time_slot()
-    if emp_id in recent_qr_usage:
+    if not data.get("confirm_checkout") and emp_id in recent_qr_usage:
         if time_slot in recent_qr_usage[emp_id]:
             last_used = recent_qr_usage[emp_id][time_slot]
             if current_time - last_used < QR_REUSE_WINDOW:
@@ -1391,39 +1566,85 @@ def api_attendance():
 
     # === All Verifications Passed - Mark Attendance ===
     now = datetime.now()
-    attendance_record = {
-        "emp_id": emp_id,
-        "employee_name": employee["name"],
-        "date": now.strftime("%Y-%m-%d"),
-        "time": now.strftime("%H:%M:%S"),
-        "timestamp": now.isoformat(),
-        "status": "Present",
-        "qr_timestamp": qr_timestamp,
-        "verified": True,
-    }
+    current_date = now.strftime("%Y-%m-%d")
 
     attendance = load_attendance()
-    attendance.append(attendance_record)
-    save_attendance(attendance)
+    existing_record = None
+    for record in attendance:
+        if record["emp_id"] == emp_id and record["date"] == current_date:
+            existing_record = record
+            break
+
+    if existing_record:
+        if existing_record["out_time"] is None:
+            if data.get("confirm_checkout"):
+                # Confirm check-out
+                existing_record["out_time"] = now.strftime("%H:%M:%S")
+                existing_record["out_timestamp"] = now.isoformat()
+                existing_record["status"] = "Present"
+                save_attendance(attendance)
+                print(f"✓ Check-out: {emp_id} - {employee['name']} at {now.strftime('%H:%M:%S')}")
+                return jsonify({
+                    "success": True,
+                    "message": "Check-out successful",
+                    "employee_name": employee["name"],
+                    "action": "check-out",
+                    "in_time": existing_record["in_time"],
+                    "out_time": existing_record["out_time"],
+                    "status": "Present"
+                })
+            else:
+                # Pending check-out
+                print(f"⚠ Pending check-out for {emp_id} on {current_date}")
+                return jsonify({
+                    "success": False,
+                    "message": "Confirm check-out",
+                    "employee_name": employee["name"],
+                    "in_time": existing_record["in_time"],
+                    "out_time": now.strftime("%H:%M:%S"),
+                    "status": "Pending Check-out"
+                })
+        else:
+            # Already checked out
+            print(f"⚠ Already checked out for {emp_id} on {current_date}")
+            return jsonify({
+                "success": False,
+                "message": "Already checked out today",
+                "employee_name": employee["name"],
+                "in_time": existing_record["in_time"],
+                "out_time": existing_record["out_time"],
+                "status": "Already Present"
+            })
+    else:
+        # Check-in
+        attendance_record = {
+            "emp_id": emp_id,
+            "employee_name": employee["name"],
+            "date": current_date,
+            "in_time": now.strftime("%H:%M:%S"),
+            "in_timestamp": now.isoformat(),
+            "out_time": None,
+            "out_timestamp": None,
+            "status": "Present",
+            "qr_timestamp": qr_timestamp,
+            "verified": True,
+        }
+        attendance.append(attendance_record)
+        save_attendance(attendance)
+        print(f"✓ Check-in: {emp_id} - {employee['name']} at {now.strftime('%H:%M:%S')}")
+        return jsonify({
+            "success": True,
+            "message": "Check-in successful",
+            "employee_name": employee["name"],
+            "action": "check-in",
+            "in_time": attendance_record["in_time"],
+            "status": "Present"
+        })
 
     # Track QR usage
     if emp_id not in recent_qr_usage:
         recent_qr_usage[emp_id] = {}
     recent_qr_usage[emp_id][time_slot] = current_time
-
-    print(
-        f"✓ Attendance marked: {emp_id} - {employee['name']} at {now.strftime('%H:%M:%S')}"
-    )
-
-    return jsonify(
-        {
-            "success": True,
-            "message": "Attendance marked successfully",
-            "employee_name": employee["name"],
-            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "status": "Present",
-        }
-    )
 
 
 # === Main ===
