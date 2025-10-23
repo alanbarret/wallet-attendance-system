@@ -2,6 +2,8 @@
 
 A cryptographically secure attendance management system using Ed25519 signatures and QR codes for tamper-proof time tracking.
 
+![System Flowchart](flowchart.svg)
+
 ## Overview
 
 This system provides a secure, decentralized attendance tracking solution where employees use their cryptographic wallet keys to mark attendance via QR code scanning. The system ensures authenticity through dual signature verification and prevents replay attacks.
